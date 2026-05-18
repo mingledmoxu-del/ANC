@@ -13,8 +13,9 @@ void init_capture(snd_pcm_t        **cap_handle,
                   const std::string  capture_device_name) {
 
     snd_pcm_hw_params_t *params;
-    int                  rc;
-    int                  dir;
+
+    int rc;
+    int dir;
 
     /* 打开 PCM 设备进行录音（捕获）。 */
     rc = snd_pcm_open(cap_handle, capture_device_name.c_str(), SND_PCM_STREAM_CAPTURE, 0);
@@ -65,8 +66,8 @@ void init_capture(snd_pcm_t        **cap_handle,
               << " 最小周期大小: " << min_period_size_to_set << std::endl;
 
     if (*cap_period_size != CAP_FRAMES_PER_PERIOD) {
-        std::cout << "周期捕获帧数 ( " << *cap_period_size << " ) 与配置 ( "
-                  << CAP_FRAMES_PER_PERIOD << " ) 不匹配" << std::endl;
+        std::cout << "周期捕获帧数 ( " << *cap_period_size << " ) 与配置 ( " << CAP_FRAMES_PER_PERIOD << " ) 不匹配"
+                  << std::endl;
         exit(1);
     } else if (*cap_buffer_size != CAP_FRAMES_PER_PERIOD * CAP_PERIODS_PER_BUFFER) {
         std::cout << "设备缓冲区的播放帧数 ( " << *cap_buffer_size << " ) 与配置 ( "
