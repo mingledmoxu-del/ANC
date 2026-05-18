@@ -1,11 +1,11 @@
 //
-// Created by pitersk on 27.05.18.
+// 由 pitersk 创建于 27.05.18。
 //
 
 #ifndef ONELOOPCPP_PLAYBACK_H
 #define ONELOOPCPP_PLAYBACK_H
 
-/* Use the newer ALSA API */
+/* 使用较新的 ALSA API */
 #define ALSA_PCM_NEW_HW_PARAMS_API
 
 #include <alsa/asoundlib.h>

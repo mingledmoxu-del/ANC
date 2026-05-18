@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 07.06.18.
+// 由 pitersk 创建于 07.06.18。
 //
 
 #ifndef RPIANC_COMMON_H
@@ -8,6 +8,7 @@
 #include <array>
 #include <limits>
 #include <vector>
+#include <string>
 #include <fstream>
 #include <assert.h>
 

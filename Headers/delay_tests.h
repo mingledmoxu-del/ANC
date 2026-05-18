@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 20.03.19.
+// 由 pitersk 于 19.03.20 创建。
 //
 
 #ifndef RPIANC_DELAY_TESTS_H

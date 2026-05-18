@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 29.07.18.
+// 由 pitersk 于 18.07.29 创建。
 //
 
 #ifndef RPIANC_LMSFILTER_H
@@ -33,16 +33,16 @@ public:
 
     virtual sample_type lms_step(sample_type x_reference_sample, sample_type error_sample,
                                  sample_type unfiltered_x_sample) {
-        // Shift samples buffer
+        // 移动样本缓冲区
         for (long int i = filter_length - 1; i >= 1; --i) {
             _samples_buffer[i] = _samples_buffer[i - 1];
         }
         _samples_buffer[0] = x_reference_sample;
-        // Update filter coefficients
+        // 更新滤波器系数
         lms_filter_update(
                 -(_alpha) *
                 static_cast<float>(error_sample));
-        // Perform filtering step, to generate new y correction sample
+        // 执行滤波步骤，生成新的 y 修正样本
         return fir_filter.fir_step(unfiltered_x_sample);
     }
 

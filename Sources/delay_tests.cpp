@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 20.03.19.
+// 由 pitersk 创建于 20.03.19。
 //
 
 #include <omp.h>
@@ -73,7 +73,7 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
                         if (diff > 0.001 && diff < 0.01) {
                             end_time = std::chrono::high_resolution_clock::now();
                             peak_found = true;
-                            std::cout << "Peak found after " << sample << " periods. Peak val: " <<
+                            std::cout << "在 " << sample << " 个周期后找到峰值。峰值: " <<
                                       diff
                                       << std::endl;
                             break;
@@ -83,7 +83,7 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
                 if (peak_found && !info_printed) {
                     delay_us = std::chrono::duration_cast<std::chrono::microseconds>(
                             end_time - start_time).count();
-                    std::cout << "Delay: " << delay_us << " us" << std::endl;
+                    std::cout << "延迟: " << delay_us << " us" << std::endl;
                     info_printed = true;
                 }
             }
@@ -97,7 +97,7 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
     if (peak_found) {
         return delay_us;
     } else {
-        std::cout << "Peak not found" << std::endl;
+        std::cout << "未找到峰值" << std::endl;
         return -1;
     }
 

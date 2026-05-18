@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 29.07.18.
+// 由 pitersk 于 29.07.18 创建。
 //
 
 #ifndef RPIANC_FIRFILTER_H
@@ -22,12 +22,12 @@ public:
 
     sample_type fir_step(sample_type new_sample) {
         sample_type new_val = 0;
-        // Shift sample_buffer (FIFO style)
+        // 移动 samples_buffer（FIFO 风格）
         for (long unsigned int i = filter_length - 1; i >= 1; --i) {
             _samples_buffer[i] = _samples_buffer[i - 1];
         }
         _samples_buffer[0] = new_sample;
-        // Multiply and accumulate
+        // 乘法并累加
         for (long unsigned int i = 0; i < filter_length; ++i) {
             new_val += _samples_buffer[i] * _filter_coefficients[i];
         }

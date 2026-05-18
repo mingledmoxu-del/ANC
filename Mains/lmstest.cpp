@@ -1,12 +1,12 @@
 //
-// Created by pitersk on 09.08.18.
+// 由 pitersk 于 09.08.18 创建。
 //
 
 #include "../Headers/test_commons.h"
 
 void fir_test() {
     signal_vec input = gen_func();
-    // fir values from octave function fir1(20, 0.1)
+    // 来自 octave 函数 fir1(20, 0.1) 的 fir 值
     FIRFilter<FILTER_LENGTH_TEST>::filter_coeffs_array fir = {9.30221684750573e-05, 0.00144698955374871, 0.00483106060833201,
                                                          0.0119930412581248, 0.024043402026782, 0.0409337972357249,
                                                          0.0612310733616234, 0.0822835022069283, 0.100759234867788,

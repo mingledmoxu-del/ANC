@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 21.08.18.
+// 由 pitersk 于 21.08.18 创建。
 //
 
 #ifndef RPIANC_FXLMSFILTER_H

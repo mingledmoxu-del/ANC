@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 09.10.18.
+// 由 pitersk 创建于 09.10.18。
 //
 
 #include "../Headers/common.h"

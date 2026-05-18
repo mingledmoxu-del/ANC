@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 24.04.19.
+// 由 pitersk 创建于 24.04.19。
 //
 
 #ifndef RPIANC_SUBBAND_FILTERING_CONSTANTS_H

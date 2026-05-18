@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 03.09.18.
+// 由 pitersk 创建于 03.09.18。
 //
 
 #ifndef RPIANC_TEST_COMMONS_H

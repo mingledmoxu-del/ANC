@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
 
 
     if (delay_test_results.size() > 1) {
-//        Remove first, flawed element of results
+//        移除结果中的第一个可能存在误差的元素
         delay_test_results.erase(delay_test_results.begin());
         std::sort(delay_test_results.begin(), delay_test_results.end());
         long min = *delay_test_results.begin();

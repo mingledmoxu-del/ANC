@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 07.06.18.
+// 由 pitersk 创建于 07.06.18。
 //
 
 #ifndef RPIANC_PROCESSING_H

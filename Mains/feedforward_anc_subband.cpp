@@ -40,7 +40,7 @@ void subband_analysis(fixed_samples_buffer &main_buffer, subband_buffers &sub_bu
         for (unsigned long subband_i = 0; subband_i < NR_OF_SUBBANDS; ++subband_i) {
             sample_type new_error_sample = error_filters.at(subband_i).fir_step(error_sample);
             sample_type new_ref_sample = reference_filters.at(subband_i).fir_step(reference_sample);
-            // Downsample
+            // 降采样
             if (sample_i % NR_OF_SUBBANDS == 1) {
                 sub_buffers.at(subband_i).at(sample_i / 4 + 1) = new_error_sample;
                 sub_buffers.at(subband_i).at(sample_i / 4) = new_ref_sample;
@@ -62,7 +62,7 @@ void subband_synthesis(fixed_samples_buffer &main_buffer, subband_buffers &buffe
         float synthesized_sample = 0.0f;
         for (unsigned long subband_i = 0; subband_i < NR_OF_SUBBANDS; ++subband_i) {
             sample_type new_ref_sample;
-            // Upsample with 0s
+            // 用 0 上采样
             if (sample_i % NR_OF_SUBBANDS == 1) {
                 sample_type sample = buffers.at(subband_i).at(sample_i / 4);
                 new_ref_sample = filters.at(subband_i).fir_step(sample);
@@ -71,7 +71,7 @@ void subband_synthesis(fixed_samples_buffer &main_buffer, subband_buffers &buffe
             }
             synthesized_sample += new_ref_sample;
         }
-//      Fill both output channels
+//      填充两个输出通道
         main_buffer.at(sample_i) = floating_to_signed_fixed(synthesized_sample);
         main_buffer.at(sample_i - 1) = floating_to_signed_fixed(synthesized_sample);
     }
@@ -163,7 +163,7 @@ int main() {
                 playback(play_handle, playback_buffer.data(), PLAY_FRAMES_PER_PERIOD);
             }
         }
-// Exchange data between arrays
+// 在数组之间交换数据
         std::copy(processing_buffer.begin(), processing_buffer.end(), playback_buffer.begin());
         std::copy(capture_buffer.begin(), capture_buffer.end(), processing_buffer.begin());
     }

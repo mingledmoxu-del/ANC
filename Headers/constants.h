@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 23.10.18.
+// 由 pitersk 于 18.10.23 创建。
 //
 
 #ifndef RPIANC_CONSTANTS_H

@@ -105,7 +105,7 @@ int main() {
                 playback(play_handle, playback_buffer.data(), PLAY_FRAMES_PER_PERIOD);
             }
         }
-// Exchange data between arrays
+// 在数组之间交换数据
         std::copy(playback_buffer.begin(), playback_buffer.end(), reference_generated_for_processing.begin());
         std::copy(capture_buffer.begin(), capture_buffer.end(), processing_buffer.begin());
     }

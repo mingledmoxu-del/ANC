@@ -1,5 +1,5 @@
 //
-// Created by pitersk on 21.12.18.
+// 由 pitersk 于 21.12.18 创建。
 //
 
 #ifndef RPIANC_BLOCKLMSFILTER_H

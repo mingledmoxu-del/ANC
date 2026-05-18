@@ -20,11 +20,17 @@ file(GLOB SOURCES
         )
 
 # Dependency of matplotlibcpp
-find_package(PythonLibs 2.7)
+find_package(Python3 COMPONENTS Development)
+if(Python3_FOUND)
+    set(PYTHON_INCLUDE_DIRS ${Python3_INCLUDE_DIRS})
+    set(PYTHON_LIBRARIES ${Python3_LIBRARIES})
+endif()
 
 set(SOUND_INTERFACE_SOURCE_FILES Sources/capture.cpp Sources/playback.cpp)
 set(SOURCE_FILES Sources/common.cpp Sources/processing.cpp Sources/delay_tests.cpp)
 set(HEADER_FILES Headers/common.h Headers/constants.h Headers/FIRFilter.h Headers/LMSFilter.h Headers/BlockLMSFilter.h Headers/matplotlibcpp.h Headers/FxLMSFilter.h Headers/test_commons.h Headers/delay_tests.h Headers/subband_filtering_constants.h)
+include_directories(Headers)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(ffANC Mains/feedforward_anc.cpp ${SOURCE_FILES} ${SOUND_INTERFACE_SOURCE_FILES} ${HEADER_FILES})
 target_include_directories(ffANC PRIVATE ${PYTHON_INCLUDE_DIRS})

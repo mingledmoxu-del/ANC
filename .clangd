@@ -1,0 +1,10 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add: 
+    - "-IHeaders"
+    - "-fopenmp"
+Index:
+  Background: Build
+Config:
+  # 优先让 clangd 模拟 gcc-12 的行为，这样它能完美匹配 /usr/include/c++/12
+  query-driver: /usr/bin/g++-12, /usr/bin/g++-11, /usr/bin/g++*

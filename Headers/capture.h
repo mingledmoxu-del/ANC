@@ -1,12 +1,12 @@
 //
-// Created by pitersk on 27.05.18.
+// 由 pitersk 于 18.05.27 创建。
 //
 
 #ifndef ONELOOPCPP_CAPTURE_H
 #define ONELOOPCPP_CAPTURE_H
 
 
-/* Use the newer ALSA API */
+/* 使用较新的 ALSA API */
 #define ALSA_PCM_NEW_HW_PARAMS_API
 
 #include <alsa/asoundlib.h>

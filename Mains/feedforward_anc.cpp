@@ -129,9 +129,10 @@ int main() {
 #endif
             }
         }
-// Exchange data between arrays
+        // 在数组之间交换数据
         std::copy(processing_buffer.begin(), processing_buffer.end(), playback_buffer.begin());
         std::copy(capture_buffer.begin(), capture_buffer.end(), processing_buffer.begin());
+
 #ifdef CAP_MEASUREMENTS
         time_point total_end = std::chrono::high_resolution_clock::now();
         total_time.push_back(std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count());
@@ -162,4 +163,3 @@ int main() {
 
     return 0;
 }
-
