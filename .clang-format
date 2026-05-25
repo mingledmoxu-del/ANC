@@ -1,0 +1,61 @@
+# Clang-Format 配置文件
+# 适用于：C/C++ 
+# 特性：连续声明/赋值/宏对齐，长形参强制换行对齐
+
+BasedOnStyle: LLVM
+Language: Cpp
+
+# 基础缩进
+IndentWidth: 4
+ColumnLimit: 105
+
+# --- 对齐配置 (满足连续对齐要求) ---
+
+# 连续宏定义 (#define) 对齐
+AlignConsecutiveMacros: Consecutive
+
+# 连续变量声明名对齐
+AlignConsecutiveDeclarations: Consecutive
+
+# 连续赋值符号 (=) 对齐
+AlignConsecutiveAssignments: Consecutive
+
+# 行尾注释对齐
+AlignTrailingComments: true
+
+# --- 换行与参数配置 (满足长形参换行对齐) ---
+
+# 函数形参过长时换行对齐到左括号
+AlignAfterOpenBracket: Align
+
+# 禁止在同一行放置所有参数 (强制长参数列表换行)
+BinPackParameters: false
+BinPackArguments: false
+
+# 即使换行，也不允许参数全部挤在下一行开头，必须对齐括号
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# 换行时运算符的处理 (在运算符后换行)
+BreakBeforeBinaryOperators: None
+
+# --- 其他样式优化 ---
+
+# 指针样式: int *p;
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# 大括号风格: 在函数/结构体后紧跟 (Attach 风格)
+BreakBeforeBraces: Attach
+
+# 永远不将短函数放在单行
+AllowShortFunctionsOnASingleLine: None
+
+# 空行控制
+MaxEmptyLinesToKeep: 1
+
+# 自动排序头文件
+SortIncludes: true
+
+# 括号内不添加空格
+SpacesInParentheses: false
+SpaceBeforeParens: ControlStatements
