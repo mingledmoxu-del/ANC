@@ -2,29 +2,30 @@
 // 由 pitersk 创建于 20.03.19。
 //
 
-#include <omp.h>
 #include "../Headers/delay_tests.h"
+#include <omp.h>
 
-long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes_t frames_in_cap_period,
-                        snd_pcm_t *play_handle, snd_pcm_t *cap_handle, bool generate_audio) {
-
+long single_delay_check(snd_pcm_uframes_t frames_in_play_period,
+                        snd_pcm_uframes_t frames_in_cap_period,
+                        snd_pcm_t        *play_handle,
+                        snd_pcm_t        *cap_handle,
+                        bool              generate_audio) {
 
     std::chrono::high_resolution_clock::time_point start_time;
     std::chrono::high_resolution_clock::time_point end_time;
-    bool start = true;
-    bool peak_found = false;
+    bool                                           start      = true;
+    bool                                           peak_found = false;
 
     fixed_sample_type capture_buffer[frames_in_cap_period * NR_OF_CHANNELS];
     fixed_sample_type play_buffer[frames_in_play_period * NR_OF_CHANNELS];
-    long delay_us;
-    long nr_of_samples = 200;
-
+    long              delay_us;
+    long              nr_of_samples = 200;
 
     auto silence_samples = GeneratedAudio<PLAY_FRAMES_PER_PERIOD * NR_OF_CHANNELS>(true);
-    auto pitch_samples = GeneratedAudio<PLAY_FRAMES_PER_PERIOD * NR_OF_CHANNELS>(false);
+    auto pitch_samples   = GeneratedAudio<PLAY_FRAMES_PER_PERIOD * NR_OF_CHANNELS>(false);
 
     long nr_of_silence_samples = random() % 16;
-    bool info_printed = false;
+    bool info_printed          = false;
 
     omp_lock_t capture_lock;
     omp_init_lock(&capture_lock);
@@ -39,7 +40,7 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
                 if (!generate_audio) {
                     if (start) {
                         start_time = std::chrono::high_resolution_clock::now();
-                        start = false;
+                        start      = false;
                         omp_unset_lock(&capture_lock);
                     }
                     playback(play_handle, play_buffer, frames_in_play_period);
@@ -50,7 +51,7 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
                     else {
                         if (start) {
                             start_time = std::chrono::high_resolution_clock::now();
-                            start = false;
+                            start      = false;
                             omp_unset_lock(&capture_lock);
                         }
                         play_samples = pitch_samples.sample_array;
@@ -68,21 +69,18 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
                 capture(cap_handle, capture_buffer, frames_in_cap_period);
                 for (unsigned long i = 0; i < frames_in_cap_period * NR_OF_CHANNELS && !peak_found; ++i) {
                     if (i % 2 && i > 1) {
-                        float diff = ((float) capture_buffer[i] - (float) capture_buffer[i - 2]) /
-                                     (float) std::numeric_limits<fixed_sample_type>::max();
+                        float diff = ((float)capture_buffer[i] - (float)capture_buffer[i - 2]) /
+                                     (float)std::numeric_limits<fixed_sample_type>::max();
                         if (diff > 0.001 && diff < 0.01) {
-                            end_time = std::chrono::high_resolution_clock::now();
+                            end_time   = std::chrono::high_resolution_clock::now();
                             peak_found = true;
-                            std::cout << "在 " << sample << " 个周期后找到峰值。峰值: " <<
-                                      diff
-                                      << std::endl;
+                            std::cout << "在 " << sample << " 个周期后找到峰值。峰值: " << diff << std::endl;
                             break;
                         }
                     }
                 }
                 if (peak_found && !info_printed) {
-                    delay_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                            end_time - start_time).count();
+                    delay_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
                     std::cout << "延迟: " << delay_us << " us" << std::endl;
                     info_printed = true;
                 }
@@ -93,23 +91,20 @@ long single_delay_check(snd_pcm_uframes_t frames_in_play_period, snd_pcm_uframes
     snd_pcm_drain(cap_handle);
     omp_destroy_lock(&capture_lock);
 
-
     if (peak_found) {
         return delay_us;
     } else {
         std::cout << "未找到峰值" << std::endl;
         return -1;
     }
-
 }
 
 double std_deviation(std::vector<long> delays, double mean) {
     double var = 0;
     for (long delay : delays) {
-        double delayf = (double) delay;
+        double delayf = (double)delay;
         var += (delayf - mean) * (delayf - mean);
     }
-    var /= (double) delays.size();
+    var /= (double)delays.size();
     return std::sqrt(var);
 }
-
