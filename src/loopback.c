@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SAMPLE_RATE      16000
+#define SAMPLE_RATE      48000
 #define CHANNEL_NUM      2
-#define PERIOD_FRAMES    128
+#define PERIOD_FRAMES    256
 #define PERIODS          4
 #define FRAMES_PER_CHUNK PERIOD_FRAMES
 
@@ -15,7 +15,7 @@
 #define PLAYBACK_GAIN_DEN 4
 
 /* 语音优化：把双声道混成单声道，再复制回左右声道 */
-#define ENABLE_MONO_MIX 1
+#define ENABLE_MONO_MIX 0
 
 static volatile int keep_running = 1;
 
