@@ -4,7 +4,13 @@
  * 编译: gcc pb_test.c -o pb_test -lasound -lm
  */
 #include <alsa/asoundlib.h>
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 

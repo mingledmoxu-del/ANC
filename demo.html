@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIR 低通滤波器仿真演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 p-4 md:p-8">
+    <div class="max-w-6xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <h1 class="text-2xl font-bold mb-2">FIR 低通滤波器仿真演示</h1>
+        <p class="text-gray-600 mb-6 text-sm">
+            基于 C 语言版本的算法逻辑，演示有限脉冲响应 (FIR) 滤波器的时域效果。系统采用矩形窗 Sinc 函数生成滤波器系数。
+            <br>当前采样率固定为: <strong>8000 Hz</strong>，显示长度: <strong>200 个采样点</strong> (25 毫秒)。
+        </p>
+
+        <!-- 控制面板 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6 p-5 bg-gray-50 rounded-lg border border-gray-200">
+            <!-- 信号频率 -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    有用信号频率: <span id="valSignalFreq" class="font-bold text-blue-600">440</span> Hz
+                </label>
+                <input type="range" id="sliderSignalFreq" min="100" max="1000" step="10" value="440" class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+            </div>
+            
+            <!-- 噪声频率 -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    噪声频率: <span id="valNoiseFreq" class="font-bold text-red-600">3000</span> Hz
+                </label>
+                <input type="range" id="sliderNoiseFreq" min="1000" max="3900" step="100" value="3000" class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+            </div>
+
+            <!-- 截止频率 -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    FIR 截止频率: <span id="valCutoffFreq" class="font-bold text-green-600">800</span> Hz
+                </label>
+                <input type="range" id="sliderCutoffFreq" min="200" max="2000" step="50" value="800" class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+            </div>
+
+            <!-- 滤波器阶数 -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    FIR 滤波器阶数 (长度): <span id="valFilterLen" class="font-bold text-purple-600">33</span>
+                </label>
+                <input type="range" id="sliderFilterLen" min="5" max="101" step="2" value="33" class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+                <p class="text-xs text-gray-500 mt-1">必须为奇数。阶数越高，过渡带越窄，但计算量和延迟越大。</p>
+            </div>
+        </div>
+
+        <!-- 统计面板 -->
+        <div class="flex flex-wrap gap-4 mb-6">
+            <div class="bg-gray-800 text-white px-4 py-2 rounded-lg flex-1 min-w-[200px]">
+                <div class="text-xs text-gray-400">滤波前 RMS</div>
+                <div class="text-xl font-mono" id="statOrigRms">0.0000</div>
+            </div>
+            <div class="bg-blue-900 text-white px-4 py-2 rounded-lg flex-1 min-w-[200px]">
+                <div class="text-xs text-gray-400">滤波后 RMS</div>
+                <div class="text-xl font-mono" id="statFiltRms">0.0000</div>
+            </div>
+            <div class="bg-green-800 text-white px-4 py-2 rounded-lg flex-1 min-w-[200px]">
+                <div class="text-xs text-gray-400">信号衰减 (去除前 N 个瞬态点)</div>
+                <div class="text-xl font-mono"><span id="statAttenuation">0.0</span> dB</div>
+            </div>
+        </div>
+
+        <!-- 图表区 -->
+        <div class="relative h-[400px] w-full">
+            <canvas id="signalChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // 常量定义 (对应 C 代码)
+        const SAMPLE_RATE = 8000;
+        const SIGNAL_LENGTH = 200;
+        
+        let chartInstance = null;
+
+        // 获取 DOM 元素
+        const domElements = {
+            signalFreq: document.getElementById('sliderSignalFreq'),
+            noiseFreq: document.getElementById('sliderNoiseFreq'),
+            cutoffFreq: document.getElementById('sliderCutoffFreq'),
+            filterLen: document.getElementById('sliderFilterLen'),
+            valSignal: document.getElementById('valSignalFreq'),
+            valNoise: document.getElementById('valNoiseFreq'),
+            valCutoff: document.getElementById('valCutoffFreq'),
+            valLen: document.getElementById('valFilterLen'),
+            statOrig: document.getElementById('statOrigRms'),
+            statFilt: document.getElementById('statFiltRms'),
+            statAtten: document.getElementById('statAttenuation')
+        };
+
+        // 1. 生成低通 FIR 滤波器系数 (等效于 C 代码的 design_lowpass_fir)
+        function designLowpassFir(cutoffHz, fs, len) {
+            const coeffs = new Float32Array(len);
+            const fc = cutoffHz / fs;
+            const midpoint = Math.floor(len / 2);
+
+            for (let i = 0; i < len; i++) {
+                if (i === midpoint) {
+                    coeffs[i] = 2.0 * fc;
+                } else {
+                    const x = i - midpoint;
+                    coeffs[i] = Math.sin(2.0 * Math.PI * fc * x) / (Math.PI * x);
+                }
+            }
+            return coeffs;
+        }
+
+        // 2. FIR 核心处理引擎
+        function runSimulation() {
+            // 获取当前参数
+            const sigFreq = parseFloat(domElements.signalFreq.value);
+            const noiFreq = parseFloat(domElements.noiseFreq.value);
+            const cutFreq = parseFloat(domElements.cutoffFreq.value);
+            const filterLen = parseInt(domElements.filterLen.value, 10);
+
+            // 更新标签显示
+            domElements.valSignal.innerText = sigFreq;
+            domElements.valNoise.innerText = noiFreq;
+            domElements.valCutoff.innerText = cutFreq;
+            domElements.valLen.innerText = filterLen;
+
+            // 初始化滤波器系数
+            const coeffs = designLowpassFir(cutFreq, SAMPLE_RATE, filterLen);
+            
+            // 初始化滤波器状态 (环形缓冲区)
+            const buffer = new Float32Array(filterLen);
+            let bufIdx = 0;
+
+            const timeLabels = [];
+            const originalSignal = [];
+            const filteredSignal = [];
+
+            // 3. 生成信号并滤波 (等效于 C 代码主循环)
+            for (let n = 0; n < SIGNAL_LENGTH; n++) {
+                const t = n / SAMPLE_RATE;
+                const timeMs = (t * 1000).toFixed(2);
+                timeLabels.push(timeMs);
+
+                // 混合信号：正弦 + 噪声
+                const orig = 0.5 * Math.sin(2.0 * Math.PI * sigFreq * t) + 
+                             0.5 * Math.sin(2.0 * Math.PI * noiFreq * t);
+                originalSignal.push(orig);
+
+                // fir_step 逻辑
+                buffer[bufIdx] = orig;
+                let y = 0.0;
+                for (let i = 0; i < filterLen; i++) {
+                    const idx = (bufIdx - i + filterLen) % filterLen;
+                    y += buffer[idx] * coeffs[i];
+                }
+                bufIdx = (bufIdx + 1) % filterLen;
+                
+                filteredSignal.push(y);
+            }
+
+            // 4. 统计计算 (跳过瞬态)
+            let origRmsSq = 0.0;
+            let filtRmsSq = 0.0;
+            const validPoints = SIGNAL_LENGTH - filterLen;
+
+            if (validPoints > 0) {
+                for (let n = filterLen; n < SIGNAL_LENGTH; n++) {
+                    origRmsSq += originalSignal[n] * originalSignal[n];
+                    filtRmsSq += filteredSignal[n] * filteredSignal[n];
+                }
+                const origRms = Math.sqrt(origRmsSq / validPoints);
+                const filtRms = Math.sqrt(filtRmsSq / validPoints);
+                const atten = 20.0 * Math.log10(filtRms / origRms);
+
+                domElements.statOrig.innerText = origRms.toFixed(4);
+                domElements.statFilt.innerText = filtRms.toFixed(4);
+                domElements.statAtten.innerText = atten.toFixed(1);
+            } else {
+                domElements.statOrig.innerText = "N/A";
+                domElements.statFilt.innerText = "N/A";
+                domElements.statAtten.innerText = "N/A";
+            }
+
+            // 5. 更新图表
+            updateChart(timeLabels, originalSignal, filteredSignal);
+        }
+
+        // 更新 Chart.js 实例
+        function updateChart(labels, origData, filtData) {
+            if (chartInstance) {
+                chartInstance.data.labels = labels;
+                chartInstance.data.datasets[0].data = origData;
+                chartInstance.data.datasets[1].data = filtData;
+                chartInstance.update();
+            } else {
+                const ctx = document.getElementById('signalChart').getContext('2d');
+                chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: '原始信号 (含高频噪声)',
+                                data: origData,
+                                borderColor: 'rgba(239, 68, 68, 0.6)', // 红色
+                                backgroundColor: 'transparent',
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1
+                            },
+                            {
+                                label: '滤波后信号 (FIR 输出)',
+                                data: filtData,
+                                borderColor: 'rgba(37, 99, 235, 1)', // 蓝色
+                                backgroundColor: 'transparent',
+                                borderWidth: 2.5,
+                                pointRadius: 0,
+                                tension: 0.1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false, // 禁用动画以保证滑块拖动的流畅性
+                        scales: {
+                            x: {
+                                title: { display: true, text: '时间 (ms)' },
+                                ticks: { maxTicksLimit: 10 }
+                            },
+                            y: {
+                                title: { display: true, text: '振幅' },
+                                min: -1.2,
+                                max: 1.2
+                            }
+                        },
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        }
+                    }
+                });
+            }
+        }
+
+        // 绑定事件
+        domElements.signalFreq.addEventListener('input', runSimulation);
+        domElements.noiseFreq.addEventListener('input', runSimulation);
+        domElements.cutoffFreq.addEventListener('input', runSimulation);
+        domElements.filterLen.addEventListener('input', runSimulation);
+
+        // 初始化运行
+        runSimulation();
+    </script>
+</body>
+</html>
