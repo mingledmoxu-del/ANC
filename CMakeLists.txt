@@ -1,52 +1,76 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(anc)
+# 明确指定项目为 C 语言，防止 C++ 标志注入
+project(anc C)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED True)
 
-# 查找 ALSA 库
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ALSA REQUIRED alsa)
-if(NOT ALSA_FOUND)
-    message(FATAL_ERROR "ALSA library not found. Please install libasound2-dev")
+# --- 跨平台库查找策略 ---
+
+# 1. 查找数学库 (Windows 通常内置于运行时，Unix 需要 -lm)
+if(NOT WIN32)
+    find_library(MATH_LIB m)
 endif()
 
-# 查找数学库（不需要 pkg-config，直接使用）
-find_library(MATH_LIB m)
-if(NOT MATH_LIB)
-    message(FATAL_ERROR "Math library not found")
+# 2. 查找 ALSA (仅限 Linux)
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(ALSA alsa)
+    endif()
+
+    # 如果 pkg-config 没找到，尝试直接查找
+    if(NOT ALSA_FOUND)
+        find_path(ALSA_INCLUDE_DIRS NAMES alsa/asoundlib.h)
+        find_library(ALSA_LIBRARIES NAMES asound)
+        if(ALSA_INCLUDE_DIRS AND ALSA_LIBRARIES)
+            set(ALSA_FOUND TRUE)
+        endif()
+    endif()
 endif()
 
-include_directories(inc)
+# --- 可执行文件定义 ---
 
-# 添加可执行文件
-add_executable(anc
-    src/main.c
-)
-add_executable(loop
-    src/loopback.c
-)
-add_executable(pb_test
-    src/pb_test.c
-)
+# 通用包含目录
+set(INC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
-# 链接 loop（只需要 ALSA）
-target_link_libraries(loop ${ALSA_LIBRARIES})
-target_include_directories(loop PRIVATE ${ALSA_INCLUDE_DIRS})
-target_compile_options(loop PRIVATE ${ALSA_CFLAGS_OTHER})
+# Windows 特定构建
+if(WIN32)
+    add_executable(fir src/fir_demo.c)
+    target_include_directories(fir PRIVATE ${INC_DIR})
+    if(MATH_LIB)
+        target_link_libraries(fir PRIVATE ${MATH_LIB})
+    endif()
+    message(STATUS "Windows build: ALSA features disabled.")
+else()
+    # Linux/Unix 构建
+    add_executable(anc src/main.c)
+    target_include_directories(anc PRIVATE ${INC_DIR})
 
-# 链接 pb_test（需要 ALSA + 数学库）
-target_link_libraries(pb_test ${ALSA_LIBRARIES} ${MATH_LIB})
-target_include_directories(pb_test PRIVATE ${ALSA_INCLUDE_DIRS})
-target_compile_options(pb_test PRIVATE ${ALSA_CFLAGS_OTHER})
+    add_executable(loop src/loopback.c)
+    target_include_directories(loop PRIVATE ${INC_DIR})
 
-# 链接 anc（如果需要音频功能，取消下面的注释）
-# target_link_libraries(anc ${ALSA_LIBRARIES})
-# target_include_directories(anc PRIVATE ${ALSA_INCLUDE_DIRS})
-# target_compile_options(anc PRIVATE ${ALSA_CFLAGS_OTHER})
+    add_executable(pb_test src/pb_test.c)
+    target_include_directories(pb_test PRIVATE ${INC_DIR})
 
-# 显示链接信息
-message(STATUS "ALSA libraries: ${ALSA_LIBRARIES}")
-message(STATUS "ALSA includes: ${ALSA_INCLUDE_DIRS}")
+    # 链接 ALSA (如果找到)
+    if(ALSA_FOUND)
+        foreach(target anc loop pb_test)
+            target_link_libraries(${target} PRIVATE ${ALSA_LIBRARIES})
+            target_include_directories(${target} PRIVATE ${ALSA_INCLUDE_DIRS})
+            if(ALSA_CFLAGS_OTHER)
+                target_compile_options(${target} PRIVATE ${ALSA_CFLAGS_OTHER})
+            endif()
+        endforeach()
+        message(STATUS "ALSA found: ${ALSA_LIBRARIES}")
+    endif()
+
+    # 链接数学库
+    if(MATH_LIB)
+        target_link_libraries(pb_test PRIVATE ${MATH_LIB})
+    endif()
+endif()
+
 message(STATUS "Math library: ${MATH_LIB}")
