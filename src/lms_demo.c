@@ -1,29 +1,11 @@
 /*
- * Phase 3: LMS 自适应噪声抵消 — WAV 文件版
+ * Phase 4: FxLMS — 次级通路补偿
  *
- * 信号流:
- *   WAV 文件 → x[n] ──→ 声学通路(plant) ──→ d[n] (不开 ANC 时耳朵听到的)
- *                      │
- *                      └──→ LMS 自适应 FIR ──→ y[n] ≈ d[n]
- *                                                 │
- *                                                -y[n] = 反噪声
- *                                 d[n] + (-y[n]) = 残留 e[n] → 0
+ * 核心: S-path 让反噪声在到达误差麦前被扭曲。
+ *   LMS  不补偿 → 梯度方向错 → 效果差甚至发散
+ *   FxLMS 用 S_hat 预滤波参考信号 → 补偿延迟 → 效果明显更好
  *
- * LMS 公式:  w[k] = leak * w[k] + mu * error * x[n-k]
- *
- * 输出:
- *   xxx_noise.wav     — 经过声学通路的噪声 (不开 ANC)
- *   xxx_antinoise.wav — LMS 生成的反噪声
- *   xxx_residual.wav  — 叠加后残留 (理想趋近静音)
- *   error.csv         — 误差收敛曲线
- *
- * 用法:
- *   ./lms_demo my_audio.wav    (用你自己的 WAV)
- *   ./lms_demo --gen           (自动生成白噪声测试 WAV)
- *
- * 只支持 16-bit PCM WAV，采样率不限 (但会按文件的真实采样率处理)
- *
- * 编译: gcc lms_demo.c -o lms_demo -lm
+ * 编译: gcc fxlms_demo.c -o fxlms_demo -lm
  */
 
 #include <math.h>
@@ -32,505 +14,338 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#define LMS_TAPS   64
+#define PLANT_TAPS 13
+#define SPATH_TAPS 5
+#define MU_LMS     0.00002f /* LMS 不补偿 S, 步长必须极小才不爆炸 */
+#define MU_FXLMS   0.002f   /* FxLMS 有补偿, 可以大步长 */
+#define LEAK       0.9999f
+#define FS         16000
+#define DURATION   5.0f
 
-/* ================================================================
- *  一、可调参数
- * ================================================================ */
-#define LMS_TAPS   64      /* LMS 滤波器阶数 */
-#define PLANT_TAPS 13      /* 模拟声学通路的 FIR 阶数 */
-#define MU         0.005f  /* 步长: 太大会发散, 太小收敛慢 */
-#define LEAK       0.9999f /* 泄漏因子: 防止系数漂移 */
-
-/* ================================================================
- *  二、WAV 文件读写 (16-bit PCM, 单/双声道)
- * ================================================================ */
+/* WAV */
 typedef struct {
-    int      sample_rate;
-    int      channels;
-    int      bits_per_sample;
-    int      data_size;   /* PCM 数据字节数 */
-    int16_t *data;        /* PCM 采样值 (交错排列) */
-    int      num_samples; /* 采样总数 (= data_size / (channels*2)) */
+    int      sr, ch, bps, ds, ns;
+    int16_t *data;
 } WavFile;
-
-static int wav_read(const char *filename, WavFile *wav) {
-    FILE *fp = fopen(filename, "rb");
-    if (!fp)
+static int wav_read(const char *fn, WavFile *w) {
+    FILE *f = fopen(fn, "rb");
+    if (!f)
         return -1;
-
-    /* 跳过前 22 字节 (RIFF header), 读声道数 */
-    fseek(fp, 22, SEEK_SET);
-    int16_t ch;
-    if (fread(&ch, 2, 1, fp) != 1) {
-        fclose(fp);
-        return -1;
-    }
-    wav->channels = ch;
-
-    /* 读采样率 */
-    int32_t sr;
-    if (fread(&sr, 4, 1, fp) != 1) {
-        fclose(fp);
+    fseek(f, 22, SEEK_SET);
+    int16_t c;
+    fread(&c, 2, 1, f);
+    w->ch = c;
+    int32_t s;
+    fread(&s, 4, 1, f);
+    w->sr = s;
+    fseek(f, 34, SEEK_SET);
+    int16_t b;
+    fread(&b, 2, 1, f);
+    w->bps = b;
+    if (b != 16) {
+        fclose(f);
         return -1;
     }
-    wav->sample_rate = sr;
-
-    /* 跳到 34 字节, 读位深 */
-    fseek(fp, 34, SEEK_SET);
-    int16_t bps;
-    if (fread(&bps, 2, 1, fp) != 1) {
-        fclose(fp);
-        return -1;
-    }
-    wav->bits_per_sample = bps;
-
-    if (bps != 16) {
-        fprintf(stderr, "只支持 16-bit WAV, 当前 %d-bit\n", bps);
-        fclose(fp);
-        return -1;
-    }
-
-    /* 找 "data" chunk */
-    char    tag[5] = {0};
-    int32_t chunk_size;
+    char    t[5] = {0};
+    int32_t cs;
     while (1) {
-        if (fread(tag, 1, 4, fp) != 4) {
-            fclose(fp);
+        if (fread(t, 1, 4, f) != 4) {
+            fclose(f);
             return -1;
         }
-        if (fread(&chunk_size, 4, 1, fp) != 1) {
-            fclose(fp);
-            return -1;
-        }
-        if (strncmp(tag, "data", 4) == 0)
+        fread(&cs, 4, 1, f);
+        if (!strncmp(t, "data", 4))
             break;
-        fseek(fp, chunk_size, SEEK_CUR); /* 跳过非 data chunk */
+        fseek(f, cs, SEEK_CUR);
     }
-
-    wav->data_size   = chunk_size;
-    wav->num_samples = chunk_size / (wav->channels * 2);
-    wav->data        = malloc(chunk_size);
-    if (!wav->data) {
-        fclose(fp);
-        return -1;
-    }
-    if (fread(wav->data, 1, chunk_size, fp) != (size_t)chunk_size) {
-        free(wav->data);
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
+    w->ds   = cs;
+    w->ns   = cs / (w->ch * 2);
+    w->data = malloc(cs);
+    fread(w->data, 1, cs, f);
+    fclose(f);
     return 0;
 }
-
-static int wav_write(const char *filename, int sr, int ch, const int16_t *data, int num_samples) {
-    FILE *fp = fopen(filename, "wb");
-    if (!fp)
+static int wav_write(const char *fn, int sr, int ch, const int16_t *d, int ns) {
+    FILE *f = fopen(fn, "wb");
+    if (!f)
         return -1;
-
-    int byte_rate   = sr * ch * 2;
-    int block_align = ch * 2;
-    int data_size   = num_samples * block_align;
-    int riff_size   = 36 + data_size;
-
-    /* RIFF header */
-    fwrite("RIFF", 1, 4, fp);
-    fwrite(&riff_size, 4, 1, fp);
-    fwrite("WAVE", 1, 4, fp);
-
-    /* fmt chunk */
-    fwrite("fmt ", 1, 4, fp);
-    int32_t fmt32 = 16;
-    fwrite(&fmt32, 4, 1, fp);
-    int16_t af16 = 1;
-    fwrite(&af16, 2, 1, fp);
-    int16_t ch16 = ch;
-    fwrite(&ch16, 2, 1, fp);
-    int32_t sr32 = sr;
-    fwrite(&sr32, 4, 1, fp);
-    int32_t br32 = byte_rate;
-    fwrite(&br32, 4, 1, fp);
-    int16_t ba16 = block_align;
-    fwrite(&ba16, 2, 1, fp);
+    int br = sr * ch * 2, ba = ch * 2, ds = ns * ba, rs = 36 + ds;
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&rs, 4, 1, f);
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);
+    int32_t f32 = 16;
+    fwrite(&f32, 4, 1, f);
+    int16_t a16 = 1;
+    fwrite(&a16, 2, 1, f);
+    int16_t c16 = ch;
+    fwrite(&c16, 2, 1, f);
+    int32_t s32 = sr;
+    fwrite(&s32, 4, 1, f);
+    int32_t b32 = br;
+    fwrite(&b32, 4, 1, f);
+    int16_t ba16 = ba;
+    fwrite(&ba16, 2, 1, f);
     int16_t bp16 = 16;
-    fwrite(&bp16, 2, 1, fp);
-
-    /* data chunk */
-    fwrite("data", 1, 4, fp);
-    fwrite(&data_size, 4, 1, fp);
-    fwrite(data, 1, data_size, fp);
-    fclose(fp);
+    fwrite(&bp16, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&ds, 4, 1, f);
+    fwrite(d, 1, ds, f);
+    fclose(f);
     return 0;
 }
-
-static void wav_free(WavFile *wav) {
-    free(wav->data);
-    wav->data = NULL;
+static void wav_free(WavFile *w) {
+    free(w->data);
 }
 
-/* ================================================================
- *  三、固定 FIR: 模拟声学通路 (Plant)
- *
- *  声音从喇叭到耳朵之间有延迟和衰减, plant 用 FIR 来模拟这段物理路径。
- *  系数是固定的, 不会被 LMS 修改。
- * ================================================================ */
+/* FIR 基础 */
 typedef struct {
-    float h[PLANT_TAPS];   /* 固定系数 (模拟路径特性) */
-    float buf[PLANT_TAPS]; /* 环形缓冲区 (历史输入) */
-    int   head;            /* 写指针 */
-} PlantFIR;
-
-static void plant_init(PlantFIR *p) {
-    /* 模拟声学通路脉冲响应: 延迟 + 主脉冲 + 衰减尾音 */
-    float raw[] = {
-        0.00f,
-        0.00f,
-        0.00f,
-        0.00f, /* 4 采样延迟 ~0.25ms @16k */
-        0.30f,
-        0.50f,
-        0.70f,
-        0.85f,
-        1.00f, /* 主脉冲上升沿 */
-        0.60f,
-        0.30f,
-        0.15f,
-        0.05f /* 衰减尾音 */
-    };
-
-    /* 归一化: sum(h[i]) = 1, 保证信号能量不放大不缩小 */
-    float sum = 0.0f;
-    for (int i = 0; i < PLANT_TAPS; i++)
-        sum += raw[i];
-    for (int i = 0; i < PLANT_TAPS; i++) {
-        p->h[i]   = raw[i] / sum;
-        p->buf[i] = 0.0f;
-    }
-    p->head = 0;
+    float *h, *buf;
+    int    len, head;
+} FIR;
+static FIR fir_new(int len, const float *c) {
+    FIR f;
+    f.len   = len;
+    f.h     = malloc(len * sizeof(float));
+    f.buf   = calloc(len, sizeof(float));
+    f.head  = 0;
+    float s = 0;
+    for (int i = 0; i < len; i++)
+        s += c[i];
+    for (int i = 0; i < len; i++)
+        f.h[i] = c[i] / s;
+    return f;
 }
-
-static float plant_process(PlantFIR *p, float x) {
-    p->buf[p->head] = x; /* ① 新采样写入环形缓冲区 */
-
-    float y = 0.0f;
-    for (int i = 0; i < PLANT_TAPS; i++) {
-        /* ② 从最新往旧读: (head-i+TAPS)%TAPS */
-        int idx = (p->head - i + PLANT_TAPS) % PLANT_TAPS;
-        y += p->h[i] * p->buf[idx]; /* ③ 乘积累加 */
+static float fir_step(FIR *f, float x) {
+    f->buf[f->head] = x;
+    float y         = 0;
+    for (int i = 0; i < f->len; i++) {
+        int id = (f->head - i + f->len) % f->len;
+        y += f->h[i] * f->buf[id];
     }
-
-    p->head = (p->head + 1) % PLANT_TAPS; /* ④ 写指针前进 */
+    f->head = (f->head + 1) % f->len;
     return y;
 }
+static void fir_free(FIR *f) {
+    free(f->h);
+    free(f->buf);
+}
 
-/* ================================================================
- *  四、LMS 自适应滤波器
- *
- *  w[k] = leak * w[k] + mu * error * x[n-k]
- *
- *  lms_step 一步完成: ① FIR 滤波输出 y  ② 算误差  ③ 更新系数
- *  返回误差 e, 让外部可以观测收敛情况。
- * ================================================================ */
+/* LMS/FxLMS 共用的自适应滤波器 */
 typedef struct {
-    float *w;    /* 自适应系数 (LMS 自己调的) */
-    float *x;    /* 参考信号环形缓冲区 */
-    int    len;  /* 滤波器阶数 */
-    int    head; /* 写指针 */
-    float  mu;   /* 步长 */
-    float  leak; /* 泄漏因子 */
-} LMSFilter;
-
-static LMSFilter lms_create(int len, float mu, float leak) {
-    LMSFilter l;
+    float *w, *x;
+    int    len, head;
+    float  mu, leak;
+} LMS;
+static LMS lms_new(int len, float mu, float leak) {
+    LMS l;
     l.len  = len;
     l.mu   = mu;
     l.leak = leak;
+    l.head = 0;
     l.w    = calloc(len, sizeof(float));
     l.x    = calloc(len, sizeof(float));
-    l.head = 0;
     return l;
 }
-
-static void lms_destroy(LMSFilter *l) {
+static void lms_free(LMS *l) {
     free(l->w);
     free(l->x);
 }
 
-/*
- * 输入 x (参考信号), 输入 d (期望信号 = 耳朵听到的噪声)
- * 返回 e = d - y (误差 = 残留)
- *
- * 内部自动:
- *   1. y = sum(w[k] * x[n-k])          — FIR 滤波
- *   2. e = d - y                       — 算误差
- *   3. w[k] = leak*w[k] + mu*e*x[n-k]  — 更新系数
- */
-static float lms_step(LMSFilter *l, float x, float d) {
-    /* ① 存参考信号 */
-    l->x[l->head] = x;
-
-    /* ② FIR 滤波: y = w · x_history */
-    float y = 0.0f;
-    for (int k = 0; k < l->len; k++) {
-        int idx = (l->head - k + l->len) % l->len;
-        y += l->w[k] * l->x[idx];
+/* 工具 */
+static void gen_wav(const char *fn) {
+    int      ns = FS * DURATION;
+    int16_t *d  = malloc(2 * ns * sizeof(int16_t));
+    for (int i = 0; i < ns; i++) {
+        float v = 1.6f * (float)rand() / RAND_MAX - 0.8f;
+        if (v > 1)
+            v = 1;
+        else if (v < -1)
+            v = -1;
+        int16_t s16  = (int16_t)(v * 32767);
+        d[i * 2]     = s16;
+        d[i * 2 + 1] = s16;
     }
-
-    /* ③ 误差 */
-    float e = d - y;
-
-    /* ④ LMS 系数更新: w[k] += mu * e * x[n-k] */
-    for (int k = 0; k < l->len; k++) {
-        int idx = (l->head - k + l->len) % l->len;
-        l->w[k] = l->leak * l->w[k] + l->mu * e * l->x[idx];
-    }
-
-    l->head = (l->head + 1) % l->len;
-    return e;
+    wav_write(fn, FS, 2, d, ns);
+    free(d);
+    printf("生成: %s (%ds 白噪声)\n", fn, (int)DURATION);
 }
-
-/* ================================================================
- *  五、生成测试 WAV (白噪声, 方便没有文件时跑起来看效果)
- * ================================================================ */
-static void generate_test_wav(const char *filename, int sr, int seconds) {
-    int      nsamples = sr * seconds;
-    int16_t *data     = malloc(2 * nsamples * sizeof(int16_t));
-
-    for (int i = 0; i < nsamples; i++) {
-        /* 白噪声 [-1, 1], 幅度砍到 0.8 留一点 headroom */
-        float val = 1.6f * (float)rand() / (float)RAND_MAX - 0.8f;
-        if (val > 1.0f)
-            val = 1.0f;
-        if (val < -1.0f)
-            val = -1.0f;
-        int16_t v16     = (int16_t)(val * 32767);
-        data[i * 2]     = v16;
-        data[i * 2 + 1] = v16;
-    }
-
-    wav_write(filename, sr, 2, data, nsamples);
-    free(data);
-    printf("生成测试文件: %s (%dHz, %ds, 白噪声, 双声道)\n", filename, sr, seconds);
-}
-
-/* ================================================================
- *  六、提取输入文件名 (去掉目录和扩展名)
- * ================================================================ */
-static void get_basename(const char *path, char *out, int maxlen) {
-    /* 找到最后一个 '/' 或 '\' */
-    const char *name = path;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/' || *p == '\\')
-            name = p + 1;
-    }
-
-    /* 拷贝到 out, 去掉 .wav/.WAV 扩展名 */
+static void basename_of(const char *p, char *o, int mx) {
+    const char *n = p;
+    for (const char *c = p; *c; c++)
+        if (*c == '/' || *c == '\\')
+            n = c + 1;
     int i = 0;
-    while (name[i] && i < maxlen - 1) {
-        if (name[i] == '.' && (strcasecmp(name + i, ".wav") == 0))
+    while (n[i] && i < mx - 1) {
+        if (n[i] == '.' && !strcasecmp(n + i, ".wav"))
             break;
-        out[i] = name[i];
+        o[i] = n[i];
         i++;
     }
-    out[i] = '\0';
+    o[i] = 0;
 }
 
-/* ================================================================
- *  七、主程序
- * ================================================================ */
 int main(int argc, char *argv[]) {
-    const char *infile;
-
-    if (argc > 1 && strcmp(argv[1], "--gen") == 0) {
-        generate_test_wav("input.wav", 16000, 3);
-        infile = "input.wav";
-    } else if (argc > 1) {
-        infile = argv[1];
-    } else {
-        printf("用法: %s <wav文件>  或  %s --gen\n", argv[0], argv[0]);
+    const char *in;
+    if (argc > 1 && !strcmp(argv[1], "--gen")) {
+        gen_wav("input.wav");
+        in = "input.wav";
+    } else if (argc > 1)
+        in = argv[1];
+    else {
+        printf("用法: %s <wav> 或 --gen\n", argv[0]);
         return 1;
     }
 
-    /*----- 1. 读 WAV (只取第一个声道) -----*/
     WavFile wav;
-    if (wav_read(infile, &wav) != 0) {
-        fprintf(stderr, "无法读取 %s\n", infile);
+    if (wav_read(in, &wav)) {
+        fprintf(stderr, "读失败\n");
         return 1;
     }
-    printf("读入: %s  sr=%d ch=%d samples=%d (%.1f秒)\n",
-           infile,
-           wav.sample_rate,
-           wav.channels,
-           wav.num_samples,
-           (float)wav.num_samples / wav.sample_rate);
+    int N = wav.ns, fs = wav.sr, st = wav.ch;
+    printf("读入: %s sr=%d ch=%d samples=%d (%.1fs)\n\n", in, fs, wav.ch, N, (float)N / fs);
 
-    int N      = wav.num_samples;
-    int fs     = wav.sample_rate;
-    int stride = wav.channels; /* 双声道时取左声道 */
-
-    /* 提取到 float, 归一化到 [-1, 1] */
-    float *input_f = malloc(N * sizeof(float));
+    float *xn = malloc(N * sizeof(float));
     for (int i = 0; i < N; i++)
-        input_f[i] = wav.data[i * stride] / 32768.0f;
+        xn[i] = wav.data[i * st] / 32768.0f;
 
-    /*----- 2. 构造声学通路 (Plant) -----*/
-    PlantFIR plant;
-    plant_init(&plant);
+    /* P(z): 噪声源→耳朵 */
+    float pc[] = {0, 0, 0, 0, 0.3f, 0.5f, 0.7f, 0.85f, 1.0f, 0.6f, 0.3f, 0.15f, 0.05f};
+    /* S(z): 扬声器→误差麦 (比P短,有延迟) */
+    float sc[] = {0, 0, 0.4f, 0.7f, 1.0f};
 
-    /*----- 3. 参考信号通过声学通路 → d[n] (耳朵听到的噪声) -----*/
-    float *noise = malloc(N * sizeof(float));
-    if (!noise)
-        goto cleanup;
+    FIR P     = fir_new(PLANT_TAPS, pc);
+    FIR S_lms = fir_new(SPATH_TAPS, sc); /* LMS 的信号通路 */
+    FIR S_fx  = fir_new(SPATH_TAPS, sc); /* FxLMS 的信号通路 */
+    FIR S_hat = fir_new(SPATH_TAPS, sc); /* FxLMS 的预滤波 (=S) */
+
+    /* d[n] = P(x[n]) */
+    float *dn = malloc(N * sizeof(float));
     for (int i = 0; i < N; i++)
-        noise[i] = plant_process(&plant, input_f[i]);
+        dn[i] = fir_step(&P, xn[i]);
 
-    /*----- 4. LMS 自适应学习抵消 -----*/
-    LMSFilter lms   = lms_create(LMS_TAPS, MU, LEAK);
-    float    *error = malloc(N * sizeof(float));
-    float    *anti  = malloc(N * sizeof(float)); /* 反噪声 */
-    if (!error || !anti)
-        goto cleanup;
-    FILE *csv = fopen("error.csv", "w");
-    if (!csv) {
-        fprintf(stderr, "无法创建 error.csv (当前目录无写权限?)\n");
-        goto cleanup;
-    }
+    int skip = LMS_TAPS * 4;
 
-    fprintf(csv, "Sample,Time_s,Error\n");
-
-    float rms_err = 0.0f;
-    float rms_dn  = 0.0f;
-    int   skip    = LMS_TAPS * 4; /* 跳过前 256 点让滤波器稳定 */
-
+    /* ====== LMS (无S补偿, MU极小) ====== */
+    LMS    lm = lms_new(LMS_TAPS, MU_LMS, LEAK);
+    float *el = malloc(N * sizeof(float));
     for (int i = 0; i < N; i++) {
-        /* lms_step: 输入参考信号 x 和期望信号 d, 返回误差 */
-        error[i] = lms_step(&lms, input_f[i], noise[i]);
-
-        /* 反噪声 = -(d - error) = LMS 输出的负值 */
-        /* 因为 error = d - y, 所以 -y = error - d, 保留 error 作为残留 */
-        float lms_out = noise[i] - error[i]; /* y = d - e */
-        anti[i]       = -lms_out;            /* 反噪声 = -y */
-
-        /* 每 100 采样记录一次误差 */
-        if (i % 100 == 0)
-            fprintf(csv, "%d,%.6f,%.6f\n", i, (float)i / fs, error[i]);
-
-        /* 稳定期统计 */
-        if (i >= skip) {
-            rms_err += error[i] * error[i];
-            rms_dn += noise[i] * noise[i];
+        lm.x[lm.head] = xn[i];
+        float y       = 0;
+        for (int k = 0; k < lm.len; k++) {
+            int id = (lm.head - k + lm.len) % lm.len;
+            y += lm.w[k] * lm.x[id];
         }
+        float ym = fir_step(&S_lms, y);
+        float e  = dn[i] - ym;
+        el[i]    = e;
+        for (int k = 0; k < lm.len; k++) {
+            int id  = (lm.head - k + lm.len) % lm.len;
+            lm.w[k] = LEAK * lm.w[k] + MU_LMS * e * lm.x[id];
+        }
+        lm.head = (lm.head + 1) % lm.len;
     }
-    fclose(csv);
-    csv = NULL;
+    float rl = 0;
+    for (int i = skip; i < N; i++)
+        rl += el[i] * el[i];
+    rl = sqrtf(rl / (N - skip));
 
-    /*----- 5. 统计 -----*/
-    int steady_samples = N - skip;
-    rms_err            = sqrtf(rms_err / (float)steady_samples);
-    rms_dn             = sqrtf(rms_dn / (float)steady_samples);
-
-    printf("\n===== LMS 噪声抵消结果 =====\n");
-    printf("  LMS 阶数:  %d\n", LMS_TAPS);
-    printf("  声学通路:  %d 阶\n", PLANT_TAPS);
-    printf("  步长 mu:   %.4f\n", MU);
-    printf("  泄漏因子:  %.4f\n", LEAK);
-    printf("  稳定期 (跳过前 %d 点, 共 %d 点):\n", skip, steady_samples);
-    printf("    噪声 RMS:        %.4f\n", rms_dn);
-    printf("    残留 RMS:        %.4f\n", rms_err);
-    if (rms_dn > 0.0f)
-        printf("    衰减:            %.1f dB\n", 20.0f * log10f(rms_err / rms_dn));
-    printf("    (理想: 负无穷 dB = 完全静音)\n");
-    printf("  误差收敛曲线: error.csv\n");
-
-    /*----- 6. 构建输出文件名 -----*/
-    char base[256];
-    get_basename(infile, base, sizeof(base));
-
-    char fn_noise[512], fn_anti[512], fn_residual[512];
-    snprintf(fn_noise, sizeof(fn_noise), "%s_noise.wav", base);
-    snprintf(fn_anti, sizeof(fn_anti), "%s_antinoise.wav", base);
-    snprintf(fn_residual, sizeof(fn_residual), "%s_residual.wav", base);
-
-    /*----- 7. float → int16_t, 写 WAV -----*/
-    int16_t *buf_noise    = NULL;
-    int16_t *buf_anti     = NULL;
-    int16_t *buf_residual = NULL;
-
-    buf_noise    = malloc(2 * N * sizeof(int16_t));
-    buf_anti     = malloc(2 * N * sizeof(int16_t));
-    buf_residual = malloc(2 * N * sizeof(int16_t));
-
-    if (!buf_noise || !buf_anti || !buf_residual) {
-        fprintf(stderr,
-                "输出缓冲区分配失败 (N=%d, 需 %.1f MB)\n",
-                N,
-                (3.0 * N * sizeof(int16_t)) / (1024 * 1024));
-        goto cleanup;
-    }
-
+    /* ====== FxLMS (有S补偿) ====== */
+    LMS    fx = lms_new(LMS_TAPS, MU_FXLMS, LEAK);
+    float *ef = malloc(N * sizeof(float));
+    /* xf_buf: 预滤波参考信号历史 (FxLMS 专用) */
+    float *xf_buf = calloc(LMS_TAPS, sizeof(float));
     for (int i = 0; i < N; i++) {
-        /* noise: clamp + 转 int16, 左右声道复制 */
-        float vn = noise[i];
-        if (vn > 1.0f)
-            vn = 1.0f;
-        else if (vn < -1.0f)
-            vn = -1.0f;
-        int16_t vn16         = (int16_t)(vn * 32767);
-        buf_noise[i * 2]     = vn16;
-        buf_noise[i * 2 + 1] = vn16;
+        float xf        = fir_step(&S_hat, xn[i]); /* 预滤波 */
+        xf_buf[fx.head] = xf;                      /* 存历史 */
 
-        /* anti: clamp + 转 int16, 左右声道复制 */
-        float va = anti[i];
-        if (va > 1.0f)
-            va = 1.0f;
-        else if (va < -1.0f)
-            va = -1.0f;
-        int16_t va16        = (int16_t)(va * 32767);
-        buf_anti[i * 2]     = va16;
-        buf_anti[i * 2 + 1] = va16;
+        fx.x[fx.head] = xn[i];
+        float y       = 0;
+        for (int k = 0; k < fx.len; k++) {
+            int id = (fx.head - k + fx.len) % fx.len;
+            y += fx.w[k] * fx.x[id];
+        }
+        float ym = fir_step(&S_fx, y);
+        float e  = dn[i] - ym;
+        ef[i]    = e;
 
-        /* residual: clamp + 转 int16, 左右声道复制 */
-        float ve = error[i];
-        if (ve > 1.0f)
-            ve = 1.0f;
-        else if (ve < -1.0f)
-            ve = -1.0f;
-        int16_t ve16            = (int16_t)(ve * 32767);
-        buf_residual[i * 2]     = ve16;
-        buf_residual[i * 2 + 1] = ve16;
+        /* FxLMS: 用 xf_buf (预滤波历史) 替代 x_buf */
+        for (int k = 0; k < fx.len; k++) {
+            int id  = (fx.head - k + fx.len) % fx.len;
+            fx.w[k] = LEAK * fx.w[k] + MU_FXLMS * e * xf_buf[id];
+        }
+        fx.head = (fx.head + 1) % fx.len;
+    }
+    float rf = 0;
+    for (int i = skip; i < N; i++)
+        rf += ef[i] * ef[i];
+    rf = sqrtf(rf / (N - skip));
+
+    float rd = 0;
+    for (int i = skip; i < N; i++)
+        rd += dn[i] * dn[i];
+    rd = sqrtf(rd / (N - skip));
+
+    printf("===== LMS vs FxLMS (跳过前%d点) =====\n", skip);
+    printf("                                    RMS         衰减\n");
+    printf(" 噪声 (无ANC):                      %.4f\n", rd);
+    printf(" LMS   (mu=%.5f, 无S补偿):         %.4f       %+.1f dB\n", MU_LMS, rl, 20 * log10f(rl / rd));
+    printf(
+        " FxLMS (mu=%.4f, 有S补偿):         %.4f       %+.1f dB\n", MU_FXLMS, rf, 20 * log10f(rf / rd));
+    printf(" FxLMS 相对 LMS 多降:              %.1f dB\n", 20 * log10f(rf / rl));
+
+    /* CSV */
+    FILE *csv = fopen("error.csv", "w");
+    if (csv) {
+        fprintf(csv, "Sample,Time,LMS,FxLMS\n");
+        for (int i = 0; i < N; i += 100)
+            fprintf(csv, "%d,%.6f,%.6f,%.6f\n", i, (float)i / fs, el[i], ef[i]);
+        fclose(csv);
     }
 
-    wav_write(fn_noise, fs, 2, buf_noise, N);
-    wav_write(fn_anti, fs, 2, buf_anti, N);
-    wav_write(fn_residual, fs, 2, buf_residual, N);
+    /* WAV */
+    char bn[256];
+    basename_of(in, bn, sizeof(bn));
+    char fl[512], ff[512];
+    snprintf(fl, sizeof(fl), "%s_lms_residual.wav", bn);
+    snprintf(ff, sizeof(ff), "%s_fxlms_residual.wav", bn);
+    int16_t *bl = malloc(2 * N * sizeof(int16_t)), *bf = malloc(2 * N * sizeof(int16_t));
+    for (int i = 0; i < N; i++) {
+        float vl = el[i];
+        if (vl > 1)
+            vl = 1;
+        else if (vl < -1)
+            vl = -1;
+        int16_t sl    = (int16_t)(vl * 32767);
+        bl[i * 2]     = sl;
+        bl[i * 2 + 1] = sl;
+        float vf      = ef[i];
+        if (vf > 1)
+            vf = 1;
+        else if (vf < -1)
+            vf = -1;
+        int16_t sf    = (int16_t)(vf * 32767);
+        bf[i * 2]     = sf;
+        bf[i * 2 + 1] = sf;
+    }
+    wav_write(fl, fs, 2, bl, N);
+    wav_write(ff, fs, 2, bf, N);
+    printf("\n输出: %s (LMS) / %s (FxLMS) / error.csv\n", fl, ff);
 
-    printf("\n输出文件:\n");
-    printf("  %s — 不开 ANC 的噪声\n", fn_noise);
-    printf("  %s — LMS 生成的反噪声\n", fn_anti);
-    printf("  %s — 叠加后残留\n", fn_residual);
-    printf("  error.csv — 误差收敛曲线\n");
-    printf("\n试试:\n");
-    printf("  1. 播放 %s → 听原始噪声\n", fn_noise);
-    printf("  2. 播放 %s → 残留应该小声很多\n", fn_residual);
-    printf("  3. Excel 打开 error.csv 画误差曲线\n");
-    printf("  4. 改 LMS_TAPS / MU / plant_init 的 raw[] 看效果变化\n\n");
-
-cleanup:
-    /*----- 8. 清理 -----*/
-    if (csv)
-        fclose(csv);
     wav_free(&wav);
-    free(input_f);
-    free(noise);
-    free(error);
-    free(anti);
-    free(buf_noise);
-    free(buf_anti);
-    free(buf_residual);
-    lms_destroy(&lms);
-
+    free(xn);
+    free(dn);
+    free(el);
+    free(ef);
+    free(bl);
+    free(bf);
+    free(xf_buf);
+    fir_free(&P);
+    fir_free(&S_lms);
+    fir_free(&S_fx);
+    fir_free(&S_hat);
+    lms_free(&lm);
+    lms_free(&fx);
     return 0;
 }
