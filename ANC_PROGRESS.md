@@ -43,11 +43,24 @@
 
 ### Phase 3: LMS 自适应滤波器
 
-**状态**: 代码已写好，待用户运行
+**状态**: 噪声抵消版已完成并验证 → 衰减 **-21.5 dB**
 
-**代码**: `D:\Code\ANC\phase3_lms\lms_demo.c`
+**代码**:
+- `D:\Code\ANC\phase3_lms\lms_demo.c` — 系统辨识版 (读 WAV → 匹配未知 FIR)
+- `Z:\anc\src\lms_anc_demo.c` — 噪声抵消版 (白噪声 → 反噪声 → 叠加静音)
 
-**功能**: 读 WAV → LMS 系统辨识 → 输出 lms_error.wav + 收敛曲线 CSV
+**功能**:
+- 生成 3 秒白噪声
+- 通过模拟声学通路 (13 阶 FIR，含延迟+衰减)
+- LMS (64 阶, mu=0.005) 在线学习生成反噪声
+- 输出 noise.wav / antinoise.wav / residual.wav / error.csv
+- **结果**: 噪声 RMS 0.2272, 残留 RMS 0.0192, 衰减 -21.5 dB ✓
+
+**学到的**:
+- LMS 权值更新: `w[k] = leak*w[k] + mu * e[n] * x[n-k]`
+- 步长 mu: 太大发散, 太小收敛慢 (0.005 对本场景合适)
+- 白噪声训练: 全频段能量 → LMS 学到通路的完整响应
+- 环形缓冲区: 和 FIR 一样, 避免每步 memmove
 
 ---
 

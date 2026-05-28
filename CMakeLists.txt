@@ -55,6 +55,9 @@ else()
     add_executable(pb_test src/pb_test.c)
     target_include_directories(pb_test PRIVATE ${INC_DIR})
 
+    add_executable(lms src/lms_anc_demo.c)
+    target_include_directories(lms PRIVATE ${MATH_LIB})
+
     # 链接 ALSA (如果找到)
     if(ALSA_FOUND)
         foreach(target anc loop pb_test)
@@ -70,6 +73,7 @@ else()
     # 链接数学库
     if(MATH_LIB)
         target_link_libraries(pb_test PRIVATE ${MATH_LIB})
+        target_link_libraries(lms PRIVATE ${MATH_LIB})
     endif()
 endif()
 
