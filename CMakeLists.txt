@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.15)
 
 # 明确指定项目为 C 语言，防止 C++ 标志注入
 project(anc C)
+set(CMAKE_C_FLAGS_DEBUG "-g -O0")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
@@ -56,7 +58,10 @@ else()
     target_include_directories(pb_test PRIVATE ${INC_DIR})
 
     add_executable(lms src/lms_anc_demo.c)
-    target_include_directories(lms PRIVATE ${MATH_LIB})
+    target_include_directories(lms PRIVATE ${INC_DIR})
+
+    add_executable(lms_demo src/lms_demo.c)
+    target_include_directories(lms_demo PRIVATE ${INC_DIR})
 
     # 链接 ALSA (如果找到)
     if(ALSA_FOUND)
@@ -74,6 +79,7 @@ else()
     if(MATH_LIB)
         target_link_libraries(pb_test PRIVATE ${MATH_LIB})
         target_link_libraries(lms PRIVATE ${MATH_LIB})
+        target_link_libraries(lms_demo PRIVATE ${MATH_LIB})
     endif()
 endif()
 
