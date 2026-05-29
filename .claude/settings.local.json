@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -l \"C:/Users/123/Downloads/caveman-main.zip\")",
+      "Bash(unzip *)",
+      "Bash(git *)"
+    ]
+  }
+}
